@@ -14,3 +14,4 @@ class Alocacao(Base):
     justificativa = Column(String(255))
     oficio = Column(String(255))
     recurrency = Column(String, nullable=True)
+    status = Column(String(20), default="PENDING", nullable=False)

@@ -13,6 +13,7 @@ class ReservationBase(BaseModel):
 	justificativa: Optional[str] = None
 	oficio: Optional[str] = None
 	recurrency: Optional[str] = None
+	status: str = "PENDING"
 
 
 class ReservationCreate(ReservationBase):
@@ -29,6 +30,7 @@ class ReservationUpdate(BaseModel):
 	justificativa: Optional[str] = None
 	oficio: Optional[str] = None
 	recurrency: Optional[str] = None
+	status: Optional[str] = None
 
 
 

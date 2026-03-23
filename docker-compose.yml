@@ -1,22 +1,20 @@
 services:
   db:
-    image: mysql:8.0
-    container_name: alocacoes_mysql
+    image: postgres:15-alpine
+    container_name: alocacoes_postgres
     restart: unless-stopped
     environment:
-      - MYSQL_DATABASE=alocacoes
-      - MYSQL_USER=user
-      - MYSQL_PASSWORD=password
-      - MYSQL_ROOT_PASSWORD=rootpassword
+      - POSTGRES_DB=alocacoes
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
       - TZ=America/Belem
     volumes:
-      - db_data:/var/lib/mysql
-      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+      - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppassword"]
+      test: ["CMD-SHELL", "pg_isready -U user -d alocacoes"]
       interval: 10s
-      timeout: 10s
-      retries: 10
+      timeout: 5s
+      retries: 5
 
   app:
     build: .
@@ -26,15 +24,15 @@ services:
       db:
         condition: service_healthy
     environment:
-      - DATABASE_URL=mysql+mysqldb://user:password@db:3306/alocacoes
+      - DATABASE_URL=postgresql://user:password@db:5432/alocacoes
       - ENV=development
       - HOST=0.0.0.0
       - PORT=8000
       - JWT_SECRET=change_me_super_secret
-      - GOOGLE_CLIENT_ID=
-      - GOOGLE_CLIENT_SECRET=
-      - GOOGLE_REDIRECT_URI=http://localhost:8000/google/callback
-      - GOOGLE_CALENDAR_ID=primary
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+      - GOOGLE_REDIRECT_URI=${GOOGLE_REDIRECT_URI}
+      - GOOGLE_CALENDAR_ID=${GOOGLE_CALENDAR_ID}
       - OAUTHLIB_INSECURE_TRANSPORT=1
     ports:
       - "8000:8000"
@@ -42,4 +40,4 @@ services:
       - .:/app
 
 volumes:
-  db_data:
+  pg_data:

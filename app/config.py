@@ -11,7 +11,7 @@ class Settings(BaseSettings):
 	PORT: int = 8000
 	APP_TIMEZONE: str = "America/Belem"
 
-	DATABASE_URL: str = "mysql+mysqldb://user:password@localhost:3306/alocacoes"
+	DATABASE_URL: str = "postgresql://user:password@localhost:5432/alocacoes"
 
 	JWT_SECRET: str = "change_me_super_secret"
 	JWT_ALGORITHM: str = "HS256"

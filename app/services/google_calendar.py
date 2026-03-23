@@ -65,7 +65,8 @@ def create_event(
 	location: Optional[str] = None,
 	calendar_id: Optional[str] = None,
 	extended_private: Optional[Dict[str, Any]] = None,
-	recurrence_rule: str = None
+	recurrence_rule: str = None,
+	attendees: Optional[List[str]] = None
 ) -> Optional[Union[Dict[str, Any], List[Dict[str, Any]]]]:
 	creds = _get_credentials(db, user_id)
 	if not creds:
@@ -81,6 +82,8 @@ def create_event(
 	}
 	if location:
 		event_body["location"] = location
+	if attendees:
+		event_body["attendees"] = [{"email": email} for email in attendees]
 	if extended_private:
 		event_body["extendedProperties"] = {"private": {k: str(v) for k, v in extended_private.items()}}
 	

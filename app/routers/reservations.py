@@ -182,7 +182,7 @@ def list_reservations(
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED)
-def create_reservation(payload: ReservationCreate, db: Session = Depends(get_db), current=Depends(require_role(ROLE_ADMIN))):
+def create_reservation(payload: ReservationCreate, db: Session = Depends(get_db), current: Usuario = Depends(require_role(1))):
     if payload.dia_horario_saida <= payload.dia_horario_inicio:
         raise HTTPException(status_code=400, detail="A data de saída deve ser posterior à data de início.")
     
@@ -190,74 +190,167 @@ def create_reservation(payload: ReservationCreate, db: Session = Depends(get_db)
     if not room:
         raise HTTPException(status_code=404, detail="Sala não encontrada.")
 
+    # Only admins can define status other than PENDING for now
+    if current.tipo_usuario < ROLE_ADMIN:
+        payload.status = "PENDING"
+    elif not payload.status:
+        payload.status = "APPROVED"
+
     start_dt = ensure_utc(payload.dia_horario_inicio)
     end_dt = ensure_utc(payload.dia_horario_saida)
 
-    if _conflicts_google(db, current.id, payload.fk_sala, start_dt, end_dt):
-        raise HTTPException(status_code=409, detail="Já existe uma reserva conflitante neste horário (Google Calendar).")
+    # Verifica conflitos apenas se estiver aprovando ou for admin criando direto
+    if payload.status == "APPROVED":
+        if _conflicts_google(db, current.id, payload.fk_sala, start_dt, end_dt):
+            raise HTTPException(status_code=409, detail="Já existe uma reserva conflitante neste horário (Google Calendar).")
     
-    extended_props = {
-        "fk_sala": str(payload.fk_sala),
-        "fk_usuario": str(payload.fk_usuario),
-        "tipo": payload.tipo,
-        "uso": payload.uso or "",
-        "oficio": payload.oficio or "",
-        "platform_source": PLATFORM_EVENT_SOURCE,
-    }
-    
-    if payload.recurrency:
-        extended_props["recurrency"] = payload.recurrency
+    # Se for aprovado, cria no Google Calendar
+    google_events_ids = []
+    if payload.status == "APPROVED":
+        extended_props = {
+            "fk_sala": str(payload.fk_sala),
+            "fk_usuario": str(payload.fk_usuario),
+            "tipo": payload.tipo,
+            "uso": payload.uso or "",
+            "oficio": payload.oficio or "",
+            "platform_source": PLATFORM_EVENT_SOURCE,
+            "status": "APPROVED",
+        }
         
-    events_list = create_event(
-        db=db,
-        user_id=current.id,
-        summary=payload.uso or f"Reserva Sala {room.codigo_sala or room.id}",
-        description=payload.justificativa,
-        start_dt_utc=start_dt,
-        end_dt_utc=end_dt,
-        location=room.descricao_sala,
-        extended_private=extended_props,
-        recurrence_rule=payload.recurrency 
-    )
+        if payload.recurrency:
+            extended_props["recurrency"] = payload.recurrency
+            
+        # Fetch the applicant user to get their email for the attendee list
+        applicant = db.query(Usuario).filter(Usuario.id == payload.fk_usuario).first()
+        attendees = [applicant.email] if applicant and applicant.email else []
 
-    if not events_list:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro ao criar evento no Google. Verifique as credenciais.")
+        events_list = create_event(
+            db=db,
+            user_id=current.id,
+            summary=f"[{payload.tipo}] {payload.uso or f'Reserva Sala {room.codigo_sala or room.id}'}",
+            description=payload.justificativa,
+            start_dt_utc=start_dt,
+            end_dt_utc=end_dt,
+            location=room.descricao_sala,
+            extended_private=extended_props,
+            recurrence_rule=payload.recurrency,
+            attendees=attendees
+        )
 
-    if isinstance(events_list, dict):
-        events_list = [events_list]
+        if not events_list:
+             # Se falhar no google mas for admin, avisamos, mas talvez salvemos local? 
+             # O comportamento original era falhar. Vamos manter.
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro ao criar evento no Google. Verifique as credenciais.")
+
+        if isinstance(events_list, dict):
+            events_list = [events_list]
+        
+        google_events_ids = [evt.get("id") for evt in events_list]
 
     try:
-        for evt in events_list:
-            g_start = evt['start'].get('dateTime') or evt['start'].get('date')
-            g_end = evt['end'].get('dateTime') or evt['end'].get('date')
-            
-            dt_inicio = to_storage_datetime(parser.parse(g_start))
-            dt_saida = to_storage_datetime(parser.parse(g_end))
+        # No nosso modelo local, as datas já vêm do payload se não veio do Google (PENDING case)
+        dt_inicio = to_storage_datetime(payload.dia_horario_inicio)
+        dt_saida = to_storage_datetime(payload.dia_horario_saida)
 
-            nova_alocacao = Alocacao(
-                fk_usuario=payload.fk_usuario,
-                fk_sala=payload.fk_sala,
-                tipo=payload.tipo,
-                uso=payload.uso,
-                justificativa=payload.justificativa,
-                oficio=payload.oficio,
-                dia_horario_inicio=dt_inicio,
-                dia_horario_saida=dt_saida,
-                recurrency=payload.recurrency 
-            )
-            db.add(nova_alocacao)
-        
-        db.commit() 
+        nova_alocacao = Alocacao(
+            fk_usuario=payload.fk_usuario,
+            fk_sala=payload.fk_sala,
+            tipo=payload.tipo,
+            uso=payload.uso,
+            justificativa=payload.justificativa,
+            oficio=payload.oficio,
+            dia_horario_inicio=dt_inicio,
+            dia_horario_saida=dt_saida,
+            recurrency=payload.recurrency,
+            status=payload.status
+        )
+        db.add(nova_alocacao)
+        db.commit()
+        db.refresh(nova_alocacao)
 
     except Exception as e:
         db.rollback()
         print(f"CRITICAL DATABASE ERROR: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail=f"Evento criado no Google, mas falha ao salvar no Banco Local: {str(e)}"
+            detail=f"Falha ao salvar no Banco Local: {str(e)}"
         )
 
-    return events_list[0]
+    return _build_local_event(nova_alocacao, payload.dia_horario_inicio, payload.dia_horario_saida)
+
+
+@router.put("/{reservation_id}/approve", status_code=status.HTTP_200_OK)
+def approve_reservation(reservation_id: int, db: Session = Depends(get_db), current=Depends(require_role(ROLE_ADMIN))):
+    alocacao = db.query(Alocacao).filter(Alocacao.id == reservation_id).first()
+    if not alocacao:
+        raise HTTPException(status_code=404, detail="Reserva não encontrada.")
+
+    if alocacao.status == "APPROVED":
+        return {"message": "Reserva já está aprovada."}
+
+    # Ao aprovar, criamos no Google Calendar
+    room = db.query(Sala).filter(Sala.id == alocacao.fk_sala).first()
+    start_dt = ensure_utc(from_storage_datetime(alocacao.dia_horario_inicio))
+    end_dt = ensure_utc(from_storage_datetime(alocacao.dia_horario_saida))
+
+    if _conflicts_google(db, current.id, alocacao.fk_sala, start_dt, end_dt):
+        raise HTTPException(status_code=409, detail="Conflito detectado no Google Calendar ao tentar aprovar.")
+
+    extended_props = {
+        "fk_sala": str(alocacao.fk_sala),
+        "fk_usuario": str(alocacao.fk_usuario),
+        "tipo": alocacao.tipo,
+        "uso": alocacao.uso or "",
+        "oficio": alocacao.oficio or "",
+        "platform_source": PLATFORM_EVENT_SOURCE,
+        "local_reservation_id": str(alocacao.id),
+        "status": "APPROVED",
+    }
+    
+    # Fetch applicant for attendees
+    applicant = db.query(Usuario).filter(Usuario.id == alocacao.fk_usuario).first()
+    attendees = [applicant.email] if applicant and applicant.email else []
+
+    events_list = create_event(
+        db=db,
+        user_id=current.id,
+        summary=f"[{alocacao.tipo}] {alocacao.uso or f'Reserva Sala {room.codigo_sala or room.id}'}",
+        description=alocacao.justificativa,
+        start_dt_utc=start_dt,
+        end_dt_utc=end_dt,
+        location=room.descricao_sala,
+        extended_private=extended_props,
+        recurrence_rule=alocacao.recurrency,
+        attendees=attendees
+    )
+
+    if not events_list:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Erro ao criar no Google ao aprovar.")
+
+    try:
+        alocacao.status = "APPROVED"
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao atualizar status local: {e}")
+
+    return {"message": "Reserva aprovada e sincronizada com sucesso."}
+
+
+@router.put("/{reservation_id}/reject", status_code=status.HTTP_200_OK)
+def reject_reservation(reservation_id: int, db: Session = Depends(get_db), current=Depends(require_role(ROLE_ADMIN))):
+    alocacao = db.query(Alocacao).filter(Alocacao.id == reservation_id).first()
+    if not alocacao:
+        raise HTTPException(status_code=404, detail="Reserva não encontrada.")
+
+    try:
+        alocacao.status = "REJECTED"
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Erro ao rejeitar: {e}")
+
+    return {"message": "Reserva rejeitada."}
 
 
 @router.put("/{reservation_id}")

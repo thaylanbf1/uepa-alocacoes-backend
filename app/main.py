@@ -4,7 +4,7 @@ from app.config import get_settings
 from app.try_database import Base, engine
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, users, rooms, reservations, calendar, google, room_types
+from app.routers import auth, users, rooms, reservations, calendar, google, room_types, dashboard
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -35,6 +35,7 @@ app.include_router(room_types.router)
 app.include_router(reservations.router)
 app.include_router(calendar.router)
 app.include_router(google.router)
+app.include_router(dashboard.router)
 
 @app.get("/health")
 def health():
