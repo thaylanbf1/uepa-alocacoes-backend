@@ -1,0 +1,45 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: alocacoes_mysql
+    restart: unless-stopped
+    environment:
+      - MYSQL_DATABASE=alocacoes
+      - MYSQL_USER=user
+      - MYSQL_PASSWORD=password
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - TZ=America/Belem
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-ppassword"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  app:
+    build: .
+    container_name: alocacoes_app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=mysql+mysqldb://user:password@db:3306/alocacoes
+      - ENV=development
+      - HOST=0.0.0.0
+      - PORT=8000
+      - JWT_SECRET=change_me_super_secret
+      - GOOGLE_CLIENT_ID=
+      - GOOGLE_CLIENT_SECRET=
+      - GOOGLE_REDIRECT_URI=http://localhost:8000/google/callback
+      - GOOGLE_CALENDAR_ID=primary
+      - OAUTHLIB_INSECURE_TRANSPORT=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+
+volumes:
+  db_data:
