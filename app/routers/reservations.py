@@ -140,6 +140,23 @@ def list_reservations(
             if user_id is not None and str(priv.get("fk_usuario")) != str(user_id):
                 continue
             result.append(ev)
+        
+        # Also include local reservations that are NOT yet in Google (PENDING or REJECTED)
+        local_filters = []
+        if room_id: local_filters.append(Alocacao.fk_sala == room_id)
+        if user_id: local_filters.append(Alocacao.fk_usuario == user_id)
+        local_filters.append(Alocacao.status != "APPROVED") # Approved should already be in Google
+        
+        try:
+            local_pending = db.query(Alocacao).filter(and_(*local_filters)).all()
+            range_start = from_storage_datetime(date_from_local)
+            range_end = from_storage_datetime(date_to_local)
+            for res in local_pending:
+                result.extend(_expand_local_reservation(res, range_start, range_end))
+        except Exception as e:
+            print(f"Erro ao buscar pendentes locais: {e}")
+
+        result.sort(key=lambda event: event["start"]["dateTime"])
         return {"items": result}
 
     filters = []
